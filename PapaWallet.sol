@@ -1,16 +1,26 @@
 pragma solidity >=0.6.0 <0.7.0;
 
 import "https://github.com/OpenZeppelin/openzeppelin-contracts/contracts/math/SafeMath.sol";
+import "https://github.com/OpenZeppelin/openzeppelin-contracts/blob/master/contracts/access/AccessControl.sol";
 
-contract LendingWallet {
+contract LendingWallet is AccessControl {
     using SafeMath for uint;
+    
+    modifier onlyAdminRole () {
+      require(isAdmin(), "Not administrator");
+      _;
+    }
+
+    modifier canWithdraw () {
+      require(isAdmin() || isInitalised(), "Not permitted to withdraw");
+      _;
+    }
 
     struct Borrower {
         uint totalBorrowed;
         uint allowance;
         address ownedAddress;
         bool isInitialised;
-        bool isActive;
     }
     
     event Deposit(
@@ -29,27 +39,32 @@ contract LendingWallet {
     );
 
     
-    address private owner;
     uint public totalBalance;
     mapping(address => Borrower) private borrowers;
     
-    constructor() public payable  {
-        owner = msg.sender;
+    constructor() public payable {
+       _setupRole(DEFAULT_ADMIN_ROLE, msg.sender);
         
         if(msg.value > 0) {
             deposit(msg.value, msg.sender);
         }
     }
     
-    function addNewBorrower(address _borrowerAddress, uint _allowance) public {
-        require(msg.sender == owner, "Only the owner may add a new borrower");
+    function isAdmin() private view returns (bool) {
+        return hasRole(DEFAULT_ADMIN_ROLE, msg.sender);
+    }
+    
+    function isInitalised() private view returns (bool) {
+        return (borrowers[msg.sender].isInitialised);
+    }
+
+    function addNewBorrower(address _borrowerAddress, uint _allowance) public onlyAdminRole {
         require(borrowers[_borrowerAddress].isInitialised == false, "This borrower has already been created");
 
         Borrower memory borrower = Borrower(
             0,
             _allowance,
             _borrowerAddress,
-            true,
             true
         );
         
@@ -67,7 +82,7 @@ contract LendingWallet {
     }
     
     function withdrawFunds(uint _amount) public {
-         if(msg.sender == owner) {
+         if(isAdmin()) {
             withdraw(msg.sender, _amount);
             return;
         }
@@ -75,10 +90,8 @@ contract LendingWallet {
         withdrawForBorrower(msg.sender, _amount);
     }
     
-    function withdrawForBorrower(address payable _address, uint _amount) private {
+    function withdrawForBorrower(address payable _address, uint _amount) private canWithdraw {
         Borrower memory borrower = borrowers[msg.sender];
-        require(borrower.isInitialised, "Borrower has not been initialsed");
-        require(borrower.isActive, "Borrower is not active");
         require(borrower.allowance > _amount, "Not enough allowance");
         require(borrower.allowance > borrower.totalBorrowed.add(_amount), "Will exceed total allowance");
         

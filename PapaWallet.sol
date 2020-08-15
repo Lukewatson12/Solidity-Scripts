@@ -3,8 +3,21 @@ pragma solidity >=0.6.0 <0.7.0;
 import "https://github.com/OpenZeppelin/openzeppelin-contracts/contracts/math/SafeMath.sol";
 import "https://github.com/OpenZeppelin/openzeppelin-contracts/blob/master/contracts/access/AccessControl.sol";
 
-contract LendingWallet is AccessControl {
-    using SafeMath for uint;
+
+contract Allowance is AccessControl {
+    struct AllowanceStruct {
+        uint allowanceUsed;
+        uint allowanceTotal;
+        address ownedAddress;
+        bool isInitialised;
+    }
+    
+    event AllowanceCreated(
+        address indexed _address,
+        uint _allowance
+    );
+    
+    mapping(address => AllowanceStruct) internal allowances;
     
     modifier onlyAdminRole () {
       require(isAdmin(), "Not administrator");
@@ -16,73 +29,61 @@ contract LendingWallet is AccessControl {
       _;
     }
 
-    struct Borrower {
-        uint totalBorrowed;
-        uint allowance;
-        address ownedAddress;
-        bool isInitialised;
-    }
-    
-    event Deposit(
-        address indexed _from,
-        uint _value
-    );
-    
-    event Withdrawal(
-        address indexed _to,
-        uint _value
-    );
-    
-    event BorrowerCreated(
-        address indexed _address,
-        uint _allowance
-    );
-
-    
-    uint public totalBalance;
-    mapping(address => Borrower) private borrowers;
-    
-    constructor() public payable {
-       _setupRole(DEFAULT_ADMIN_ROLE, msg.sender);
-        
-        if(msg.value > 0) {
-            deposit(msg.value, msg.sender);
-        }
-    }
-    
-    function isAdmin() private view returns (bool) {
+    function isAdmin() internal view returns (bool) {
         return hasRole(DEFAULT_ADMIN_ROLE, msg.sender);
     }
     
     function isInitalised() private view returns (bool) {
-        return (borrowers[msg.sender].isInitialised);
+        return (allowances[msg.sender].isInitialised);
     }
+    
+    function addNewAllowance(address _allowanceAddress, uint _allowance) public onlyAdminRole {
+        require(allowances[_allowanceAddress].isInitialised == false, "This account has already been enabled");
 
-    function addNewBorrower(address _borrowerAddress, uint _allowance) public onlyAdminRole {
-        require(borrowers[_borrowerAddress].isInitialised == false, "This borrower has already been created");
-
-        Borrower memory borrower = Borrower(
+        AllowanceStruct memory allowance = AllowanceStruct(
             0,
             _allowance,
-            _borrowerAddress,
+            _allowanceAddress,
             true
         );
         
-        borrowers[_borrowerAddress] = borrower;
+        allowances[_allowanceAddress] = allowance;
         
-        emit BorrowerCreated(_borrowerAddress, _allowance);
+        emit AllowanceCreated(_allowanceAddress, _allowance);
     }
     
-    function getBorrower(address _address) public view returns(uint totalBorrowed, uint allowance) {
-        return (borrowers[_address].totalBorrowed, borrowers[_address].allowance); 
+    function getBorrower(address _address) public view returns(uint totalUsed, uint allowanceTotal) {
+        return (allowances[_address].allowanceUsed, allowances[_address].allowanceTotal); 
+    }
+}
+
+contract LendingWallet is Allowance {
+    using SafeMath for uint;
+    
+    event FundsDeposited(
+        address indexed _from,
+        uint _value
+    );
+    
+    event FundsWithdrawn(
+        address indexed _to,
+        uint _value
+    );
+    
+    constructor () public {
+       _setupRole(DEFAULT_ADMIN_ROLE, msg.sender);
     }
     
-    function depositFunds() public payable {
-        deposit(msg.value, msg.sender);
+    receive() external payable {
+        emit FundsDeposited(msg.sender, msg.value);
+    }
+    
+    function viewBalance() view public returns(uint) {
+        return address(this).balance;
     }
     
     function withdrawFunds(uint _amount) public {
-         if(isAdmin()) {
+         if(Allowance.isAdmin()) {
             withdraw(msg.sender, _amount);
             return;
         }
@@ -91,26 +92,17 @@ contract LendingWallet is AccessControl {
     }
     
     function withdrawForBorrower(address payable _address, uint _amount) private canWithdraw {
-        Borrower memory borrower = borrowers[msg.sender];
-        require(borrower.allowance > _amount, "Not enough allowance");
-        require(borrower.allowance > borrower.totalBorrowed.add(_amount), "Will exceed total allowance");
+        AllowanceStruct memory allowance = Allowance.allowances[msg.sender];
+        require(allowance.allowanceTotal > _amount, "Not enough allowance");
+        require(allowance.allowanceTotal >= allowance.allowanceUsed.add(_amount), "Will exceed total allowance");
         
-        borrowers[msg.sender].totalBorrowed = borrower.totalBorrowed.add(_amount);
+        Allowance.allowances[msg.sender].allowanceUsed = allowance.allowanceUsed.add(_amount);
         withdraw(_address, _amount); 
     }
     
-    function deposit(uint _amount, address _from) private {
-        require(_amount > 0);
-        
-        totalBalance = totalBalance.add(_amount);
-        emit Deposit(_from, _amount);
-    }
-    
     function withdraw(address payable _address, uint _amount) private {
-        require(totalBalance >= _amount);
+        require(address(this).balance >= _amount);
         _address.transfer(_amount);
-        totalBalance = totalBalance.sub(_amount);
-
-        emit Withdrawal(_address, _amount);
+        emit FundsWithdrawn(_address, _amount);
     }
 }
